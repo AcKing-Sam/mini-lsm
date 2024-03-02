@@ -68,6 +68,11 @@ impl<
     > StorageIterator for TwoMergeIterator<A, B>
 {
     type KeyType<'a> = A::KeyType<'a>;
+
+    fn num_active_iterators(&self) -> usize {
+        self.a.num_active_iterators() + self.b.num_active_iterators()
+    }
+
     fn key(&self) -> Self::KeyType<'_> {
         if self.flag {
             self.a.key()

@@ -70,6 +70,18 @@ impl<I: 'static + for<'a> StorageIterator<KeyType<'a> = KeySlice<'a>>> StorageIt
 {
     type KeyType<'a> = KeySlice<'a>;
 
+    fn num_active_iterators(&self) -> usize {
+        self.iters
+            .iter()
+            .map(|x| x.1.num_active_iterators())
+            .sum::<usize>()
+            + self
+                .current
+                .as_ref()
+                .map(|x| x.1.num_active_iterators())
+                .unwrap_or(0)
+    }
+
     fn key(&self) -> KeySlice {
         self.current.as_ref().unwrap().1.key()
     }

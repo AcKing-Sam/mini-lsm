@@ -36,6 +36,10 @@ impl LsmIterator {
 impl StorageIterator for LsmIterator {
     type KeyType<'a> = &'a [u8];
 
+    fn num_active_iterators(&self) -> usize {
+        self.inner.num_active_iterators()
+    }
+
     fn is_valid(&self) -> bool {
         self.is_valid
     }
@@ -89,6 +93,10 @@ impl<I: StorageIterator> FusedIterator<I> {
 
 impl<I: StorageIterator> StorageIterator for FusedIterator<I> {
     type KeyType<'a> = I::KeyType<'a> where Self: 'a;
+
+    fn num_active_iterators(&self) -> usize {
+        self.iter.num_active_iterators()
+    }
 
     fn is_valid(&self) -> bool {
         if self.has_errored {

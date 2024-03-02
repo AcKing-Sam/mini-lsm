@@ -9,6 +9,7 @@ use anyhow::anyhow;
 use anyhow::Result;
 pub use builder::SsTableBuilder;
 use bytes::Buf;
+use bytes::Bytes;
 pub use iterator::SsTableIterator;
 use std::fs::File;
 use std::path::Path;
@@ -150,6 +151,14 @@ impl SsTable {
             bloom: None,
             max_ts: 0,
         })
+    }
+
+    pub fn key_within(&self, _key: &[u8]) -> bool {
+        let key = KeyBytes::from_bytes(Bytes::copy_from_slice(_key));
+        if key >= *self.first_key() && key <= *self.last_key() {
+            return true;
+        }
+        return false;
     }
 
     /// Create a mock SST with only first key + last key metadata

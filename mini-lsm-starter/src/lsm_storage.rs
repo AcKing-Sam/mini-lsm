@@ -22,7 +22,7 @@ use crate::lsm_iterator::{FusedIterator, LsmIterator};
 use crate::manifest::Manifest;
 use crate::mem_table::{map_bound, MemTable};
 use crate::mvcc::LsmMvccInner;
-use crate::table::{FileObject, SsTable, SsTableIterator};
+use crate::table::{FileObject, SsTable, SsTableBuilder, SsTableIterator};
 
 pub type BlockCache = moka::sync::Cache<(usize, usize), Arc<Block>>;
 /// Represents the state of the storage engine.
@@ -156,7 +156,13 @@ impl Drop for MiniLsm {
 
 impl MiniLsm {
     pub fn close(&self) -> Result<()> {
-        unimplemented!()
+        let mut flush_thread = self.flush_thread.lock();
+        if let Some(flush_thread) = flush_thread.take() {
+            flush_thread
+                .join()
+                .map_err(|e| anyhow::anyhow!("{:?}", e))?;
+        }
+        Ok(())
     }
 
     /// Start the storage engine by either loading an existing directory or creating a new one if the directory does
@@ -306,7 +312,8 @@ impl LsmStorageInner {
         compaction_filters.push(compaction_filter);
     }
 
-    /// Get a key from the storage. In day 7, this can be further optimized by using a bloom filter.
+    /// Get a key from the storage.
+    /// In day 7, this can be further optimized by using a bloom filter.
     pub fn get(&self, _key: &[u8]) -> Result<Option<Bytes>> {
         let read_lock_guard = self.state.read();
         let val = read_lock_guard.memtable.get(_key);
@@ -331,6 +338,10 @@ impl LsmStorageInner {
 
                 for sstable_id in read_lock_guard.l0_sstables.iter() {
                     let sstable = read_lock_guard.sstables[&sstable_id].clone();
+                    // W1, D6
+                    if !sstable.key_within(_key) {
+                        continue;
+                    }
                     let mut iter = SsTableIterator::create_and_seek_to_key(
                         sstable,
                         KeySlice::from_slice(_key),
@@ -437,7 +448,46 @@ impl LsmStorageInner {
 
     /// Force flush the earliest-created immutable memtable to disk
     pub fn force_flush_next_imm_memtable(&self) -> Result<()> {
-        unimplemented!()
+        let _state_lock = self.state_lock.lock();
+
+        let memtable_to_flush;
+        let snapshot = {
+            let guard = self.state.read();
+            memtable_to_flush = guard
+                .imm_memtables
+                .last()
+                .expect("no imm memtables!")
+                .clone();
+        };
+
+        let mut sstable_builder = SsTableBuilder::new(self.options.block_size);
+
+        memtable_to_flush.flush(&mut sstable_builder)?;
+
+        let sst = sstable_builder.build(
+            memtable_to_flush.id(),
+            Some(self.block_cache.clone()),
+            self.path_of_sst(memtable_to_flush.id()),
+        )?;
+
+        {
+            let mut guard = self.state.write();
+            let mut snapshot = guard.as_ref().clone();
+            // Remove the memtable from the immutable memtables.
+            let mem = snapshot.imm_memtables.pop().unwrap();
+            assert_eq!(mem.id(), memtable_to_flush.id());
+            // Add L0 table
+
+            snapshot.l0_sstables.insert(0, memtable_to_flush.id());
+
+            snapshot
+                .sstables
+                .insert(memtable_to_flush.id(), Arc::new(sst));
+            // Update the snapshot.
+            *guard = Arc::new(snapshot);
+        };
+
+        Ok(())
     }
 
     pub fn new_txn(&self) -> Result<()> {
